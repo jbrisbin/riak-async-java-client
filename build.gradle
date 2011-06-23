@@ -1,0 +1,57 @@
+apply plugin: "java"
+apply plugin: "groovy"
+apply plugin: "idea"
+
+configurations {
+	all*.exclude group: "commons-logging"
+}
+
+repositories {
+	mavenLocal()
+	mavenCentral()
+	mavenRepo(name: "glassfish", urls: "http://download.java.net/maven/glassfish/")
+	mavenRepo(name: "java.net", urls: "http://download.java.net/maven/2")
+	mavenRepo(name: "codehaus", urls: "http://snapshots.repository.codehaus.org")
+}
+
+dependencies {
+	groovy "org.codehaus.groovy:groovy:1.8.0"
+
+	// Logging
+	compile("log4j:log4j:1.2.15") {
+		exclude(group: "com.sun.jdmk", module: "jmxtools")
+		exclude(group: "com.sun.jmx", module: "jmxri")
+		exclude(group: "javax.jms", module: "jms")
+		exclude(group: "javax.mail", module: "mail")
+	}
+	compile "org.slf4j:slf4j-api:1.6.1"
+	compile "org.slf4j:slf4j-log4j12:1.6.1"
+	compile "org.slf4j:jcl-over-slf4j:1.6.1"
+
+	// Jackson
+	compile "org.codehaus.jackson:jackson-core-asl:1.8.2"
+	compile "org.codehaus.jackson:jackson-mapper-asl:1.8.2"
+
+	// Protobuf
+	compile "com.google.protobuf:protobuf-java:2.3.0"
+
+	// Riak
+	compile "com.basho.riak:riak-client:0.14.2-SNAPSHOT"
+
+	// Grizzly
+	compile "org.glassfish.grizzly:grizzly-framework:2.1.1"
+
+	// Testing
+	testCompile "junit:junit:4.8.2"
+	testCompile "org.spockframework:spock-core:0.5-groovy-1.8"
+}
+
+task wrapper(type: Wrapper) {
+	gradleVersion = "1.0-milestone-3"
+}
+
+ideaModule {
+	beforeConfigured { module ->
+		module.dependencies.clear()
+	}
+}
