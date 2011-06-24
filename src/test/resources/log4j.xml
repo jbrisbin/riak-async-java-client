@@ -11,10 +11,10 @@
 	</appender>
 
 	<category name="com.jbrisbin">
-		<level value="DEBUG"/>
+		<level value="INFO"/>
 	</category>
 	<category name="org.glassfish.grizzly">
-		<level value="DEBUG"/>
+		<level value="INFO"/>
 	</category>
 	<category name="org.springframework">
 		<level value="WARN"/>

@@ -18,8 +18,6 @@ import static com.basho.riak.pbc.RiakMessageCodes.*;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.sql.Connection;
-import java.util.concurrent.LinkedBlockingQueue;
 
 import com.basho.riak.pbc.RPB;
 import com.google.protobuf.Message;
@@ -40,7 +38,6 @@ public class RpbFilter extends BaseFilter {
 
 	private Logger log = LoggerFactory.getLogger(getClass());
 	private HeapMemoryManager heap;
-	private LinkedBlockingQueue<Buffer> buffersToWrite = new LinkedBlockingQueue<Buffer>();
 
 	public RpbFilter(HeapMemoryManager heap) {
 		this.heap = heap;
@@ -51,6 +48,7 @@ public class RpbFilter extends BaseFilter {
 		int size = buffer.getInt();
 		int code = buffer.get();
 		if (buffer.remaining() < (size - 1)) {
+			buffer.rewind();
 			return ctx.getStopAction(buffer);
 		}
 
@@ -155,20 +153,6 @@ public class RpbFilter extends BaseFilter {
 		log.debug("wrote buffer...invoking next: " + Thread.currentThread().getName());
 
 		return ctx.getInvokeAction();
-	}
-
-	class BufferWriter implements Runnable {
-		private Buffer buffer;
-		private Connection conn;
-
-		BufferWriter(Buffer buffer, Connection conn) {
-			this.buffer = buffer;
-			this.conn = conn;
-		}
-
-		@Override public void run() {
-
-		}
 	}
 
 }

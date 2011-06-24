@@ -16,10 +16,7 @@ package com.jbrisbin.riak.async;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 
-import com.basho.riak.client.raw.RiakResponse;
-import com.basho.riak.client.raw.StoreMeta;
 import com.jbrisbin.riak.pbc.RiakObject;
 import org.junit.After;
 import org.junit.Before;
@@ -44,15 +41,10 @@ public class RiakAsyncClientTests {
 
 	@Test
 	public void testMultipleRequestsAtOnce() throws IOException, ExecutionException, InterruptedException {
-		Future<RiakResponse> future = null;
 		for (int i = 0; i < 100; i++) {
 			RiakObject robj = new RiakObject("store.throughput", "key" + i, "text/plain", "this is content from test " + i);
-			client.store(robj, new StoreMeta(null, null, false)).get();
+//			client.store(robj, new StoreMeta(null, null, false)).get();
 		}
-		if (null != future)
-			future.get();
-//		else
-//			throw new IllegalStateException("Future was null!");
 	}
 
 }

@@ -1,5 +1,6 @@
 package com.jbrisbin.riak.async
 
+import com.basho.riak.client.raw.RiakResponse
 import com.basho.riak.client.raw.StoreMeta
 import com.jbrisbin.riak.pbc.RiakObject
 import groovy.json.JsonBuilder
@@ -9,13 +10,13 @@ import spock.lang.Specification
 /**
  * @author Jon Brisbin <jon@jbrisbin.com>
  */
-class RiakClientSpec extends Specification {
+class RiakAsyncClientSpec extends Specification {
 
 	def TIMEOUT = 5
 	RiakAsyncClient client
 
 	def setup() {
-		client = new RiakAsyncClient()
+		client = new RiakAsyncClient().setMaxPoolSize(100)
 	}
 
 	def cleanup() {
@@ -29,7 +30,7 @@ class RiakClientSpec extends Specification {
 	def "Test get server info"() {
 
 		when:
-		def r = client.getServerInfo().get(TIMEOUT, TimeUnit.SECONDS)
+		def r = resolve client.getServerInfo()
 
 		then:
 		null != r
@@ -53,7 +54,7 @@ class RiakClientSpec extends Specification {
 	def "Test fetching object"() {
 
 		when:
-		def r = resolve client.fetch("bucket", "key")
+		RiakResponse r = resolve client.fetch("bucket", "key")
 
 		then:
 		null != r
@@ -107,27 +108,27 @@ class RiakClientSpec extends Specification {
 
 	def "Test store throughput"() {
 
-		given:
-		def max = 100
+		given: "a range of entries to put and delete"
+		def max = 1000
 		def range = 1..max
 		long start = System.currentTimeMillis()
 
-		when:
+		when: "all $max entries are inserted and deleted"
 		def f
 		range.each { i ->
 			def robj = new RiakObject("store.throughput", "key$i", "text/plain", "content for test entry $i")
-			resolve client.store(robj, new StoreMeta(null, null, false))
+			f = resolve client.store(robj, new StoreMeta(null, null, false))
 		}
-		f.get(2, TimeUnit.MINUTES)
+//		f.get(2, TimeUnit.MINUTES)
 		range.each { i ->
-			resolve client.delete("store.throughput", "key$i")
+			f = resolve client.delete("store.throughput", "key$i")
 		}
-		f.get(2, TimeUnit.MINUTES)
-		long elapsed = (System.currentTimeMillis() - start).toDouble()
-		long throughput = (max * 2).toDouble() / elapsed
+//		f.get(2, TimeUnit.MINUTES)
+		long elapsed = System.currentTimeMillis() - start
+		long throughput = (max * 2) / (elapsed / 1000)
 		println "ops/sec: $throughput"
 
-		then:
+		then: "throughput should be > 0"
 		throughput > 0
 	}
 
