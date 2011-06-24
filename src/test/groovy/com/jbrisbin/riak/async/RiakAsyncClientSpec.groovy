@@ -117,13 +117,13 @@ class RiakAsyncClientSpec extends Specification {
 		def f
 		range.each { i ->
 			def robj = new RiakObject("store.throughput", "key$i", "text/plain", "content for test entry $i")
-			f = resolve client.store(robj, new StoreMeta(null, null, false))
+			f = client.store(robj, new StoreMeta(null, null, false))
 		}
-//		f.get(2, TimeUnit.MINUTES)
+		f.get(2, TimeUnit.MINUTES)
 		range.each { i ->
-			f = resolve client.delete("store.throughput", "key$i")
+			f = client.delete("store.throughput", "key$i")
 		}
-//		f.get(2, TimeUnit.MINUTES)
+		f.get(2, TimeUnit.MINUTES)
 		long elapsed = System.currentTimeMillis() - start
 		long throughput = (max * 2) / (elapsed / 1000)
 		println "ops/sec: $throughput"
