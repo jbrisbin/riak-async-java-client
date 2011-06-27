@@ -18,6 +18,7 @@ import static com.basho.riak.pbc.RiakMessageCodes.*;
 import static com.google.protobuf.ByteString.*;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -31,6 +32,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.basho.riak.client.IRiakObject;
 import com.basho.riak.client.bucket.BucketProperties;
@@ -56,6 +58,7 @@ import org.apache.commons.codec.binary.Base64;
 import org.glassfish.grizzly.Connection;
 import org.glassfish.grizzly.EmptyCompletionHandler;
 import org.glassfish.grizzly.filterchain.BaseFilter;
+import org.glassfish.grizzly.filterchain.FilterChain;
 import org.glassfish.grizzly.filterchain.FilterChainBuilder;
 import org.glassfish.grizzly.filterchain.FilterChainContext;
 import org.glassfish.grizzly.filterchain.NextAction;
@@ -66,6 +69,7 @@ import org.glassfish.grizzly.memory.HeapMemoryManager;
 import org.glassfish.grizzly.nio.transport.TCPNIOTransport;
 import org.glassfish.grizzly.nio.transport.TCPNIOTransportBuilder;
 import org.glassfish.grizzly.strategies.WorkerThreadIOStrategy;
+import org.glassfish.grizzly.threadpool.ThreadPoolConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,18 +79,23 @@ import org.slf4j.LoggerFactory;
 public class RiakAsyncClient implements RawAsyncClient {
 
 	private final Logger log = LoggerFactory.getLogger(getClass());
+	private final int PROCESSORS = Runtime.getRuntime().availableProcessors();
 
 	private String host = "localhost";
 	private Integer port = 8087;
 	private Long timeout = 30L;
-	private Integer maxPoolSize = 5;
 	private DelegatingErrorHandler errorHandler = new DelegatingErrorHandler();
 	private ExecutorService workerPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 2);
 	//	private ExecutorService workerPool = Executors.newCachedThreadPool();
 	private HeapMemoryManager heap = new HeapMemoryManager();
 	private TCPNIOTransport transport = TCPNIOTransportBuilder.newInstance().build();
-	private ConnectionPool connectionPool;
+	private FilterChain filterChain;
+	private Connection connection;
+	private int maxConnectionRetries = 5;
+	private AtomicInteger retries = new AtomicInteger(0);
 	private LinkedBlockingQueue<RpbRequest> pendingRequests = new LinkedBlockingQueue<RpbRequest>();
+	private AtomicInteger requests = new AtomicInteger(0);
+	private AtomicInteger responses = new AtomicInteger(0);
 
 	public RiakAsyncClient() {
 		start();
@@ -96,12 +105,6 @@ public class RiakAsyncClient implements RawAsyncClient {
 		this.host = host;
 		this.port = port;
 		start();
-	}
-
-	public RiakAsyncClient(String host, Integer port, Integer maxPoolSize) {
-		this.host = host;
-		this.port = port;
-		this.maxPoolSize = maxPoolSize;
 	}
 
 	public RiakAsyncClient registerErrorHandler(Class<? extends Throwable> t, ErrorHandler errorHandler) {
@@ -136,15 +139,6 @@ public class RiakAsyncClient implements RawAsyncClient {
 		return this;
 	}
 
-	public Integer getMaxPoolSize() {
-		return maxPoolSize;
-	}
-
-	public RiakAsyncClient setMaxPoolSize(Integer maxPoolSize) {
-		this.maxPoolSize = maxPoolSize;
-		return this;
-	}
-
 	public ExecutorService getWorkerPool() {
 		return workerPool;
 	}
@@ -165,20 +159,20 @@ public class RiakAsyncClient implements RawAsyncClient {
 
 	@SuppressWarnings({"unchecked"})
 	public void close() {
-		if (log.isDebugEnabled())
-			log.debug(String.format("Disconnected from %s:%s", host, port));
 		try {
-			connectionPool.close(new EmptyCompletionHandler<ConnectionPool>() {
+			connection.close(new EmptyCompletionHandler<Connection>() {
 				@Override public void failed(Throwable throwable) {
 					errorHandler.handleError(throwable);
 				}
 
-				@Override public void completed(ConnectionPool result) {
+				@Override public void completed(Connection result) {
 					try {
 						transport.stop();
 					} catch (IOException e) {
 						failed(e);
 					}
+					if (log.isDebugEnabled())
+						log.debug(String.format("Disconnected from %s:%s", host, port));
 				}
 			});
 		} catch (IOException e) {
@@ -191,18 +185,21 @@ public class RiakAsyncClient implements RawAsyncClient {
 		clientChainBuilder.add(new TransportFilter());
 		clientChainBuilder.add(new RpbFilter(heap));
 		clientChainBuilder.add(new PendingRequestFilter());
+		filterChain = clientChainBuilder.build();
 
 		transport.setKeepAlive(true);
 		transport.setTcpNoDelay(true);
-		transport.setWorkerThreadPool(workerPool);
+		ThreadPoolConfig config = ThreadPoolConfig.defaultConfig();
+		config.setPoolName("vblob-gw");
+		config.setCorePoolSize(PROCESSORS);
+		config.setMaxPoolSize(PROCESSORS * 4);
+		config.setKeepAliveTime(timeout, TimeUnit.SECONDS);
+		transport.setWorkerThreadPoolConfig(config);
 		transport.setIOStrategy(WorkerThreadIOStrategy.getInstance());
-		transport.setProcessor(clientChainBuilder.build());
+		transport.setProcessor(filterChain);
 		try {
 			transport.start();
-			connectionPool = new ConnectionPool(host, port, timeout, transport, errorHandler, maxPoolSize);
-			if (log.isDebugEnabled())
-				log.debug(String.format("Connected to %s:%s", host, port));
-			generateAndSetClientId().get(timeout, TimeUnit.SECONDS);
+			connection = getConnection();
 		} catch (IOException e) {
 			errorHandler.handleError(e);
 		} catch (InterruptedException e) {
@@ -212,6 +209,28 @@ public class RiakAsyncClient implements RawAsyncClient {
 		} catch (TimeoutException e) {
 			errorHandler.handleError(e);
 		}
+	}
+
+	private Connection getConnection() throws IOException, ExecutionException, TimeoutException, InterruptedException {
+		if (null == connection || !connection.isOpen()) {
+			if (retries.get() < maxConnectionRetries) {
+				connection = transport.connect(new InetSocketAddress(host, port), new EmptyCompletionHandler<Connection>() {
+					@Override public void failed(Throwable throwable) {
+						errorHandler.handleError(throwable);
+						retries.incrementAndGet();
+					}
+
+					@Override public void completed(Connection result) {
+						if (retries.get() > 0)
+							retries.decrementAndGet();
+					}
+				}).get(timeout, TimeUnit.SECONDS);
+				if (log.isDebugEnabled())
+					log.debug(String.format("Connected to %s:%s", host, port));
+				generateAndSetClientId().get(timeout, TimeUnit.SECONDS);
+			}
+		}
+		return connection;
 	}
 
 	@Override public Future<RiakResponse> fetch(String bucket, String key) throws IOException {
@@ -250,18 +269,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 		}
 		RpbMessage<RPB.RpbGetReq> msg = new RpbMessage<RPB.RpbGetReq>(MSG_GetReq, b.build());
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(msg, callback), new EmptyCompletionHandler() {
-				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
-				}
-			});
-		} catch (IOException e) {
+			connection.write(new RpbRequest(msg, callback, requests.incrementAndGet()));
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -304,7 +313,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 	}
 
 	@SuppressWarnings({"unchecked"})
-	@Override public void store(IRiakObject object, StoreMeta storeMeta, AsyncClientCallback<RiakResponse> callback) {
+	@Override
+	public void store(final IRiakObject object, final StoreMeta storeMeta, final AsyncClientCallback<RiakResponse> callback) {
 		RPB.RpbPutReq.Builder b = RPB.RpbPutReq.newBuilder()
 				.setBucket(copyFromUtf8(object.getBucket()))
 				.setKey(copyFromUtf8(object.getKey()));
@@ -325,18 +335,17 @@ public class RiakAsyncClient implements RawAsyncClient {
 		}
 		RpbMessage<RPB.RpbPutReq> msg = new RpbMessage<RPB.RpbPutReq>(MSG_PutReq, b.build());
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(msg, callback), new EmptyCompletionHandler() {
+			getConnection().write(new RpbRequest(msg, callback, requests.incrementAndGet()), new EmptyCompletionHandler() {
 				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
+					retries.incrementAndGet();
+					if (retries.get() < maxConnectionRetries) {
+						if (log.isDebugEnabled())
+							log.debug("Retrying request: " + object);
+						store(object, storeMeta, callback);
+					}
 				}
 			});
-		} catch (IOException e) {
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -383,18 +392,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 			b.setRw(deleteQuorum);
 		RpbMessage<RPB.RpbDelReq> msg = new RpbMessage<RPB.RpbDelReq>(MSG_DelReq, b.build());
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(msg, callback), new EmptyCompletionHandler() {
-				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
-				}
-			});
-		} catch (IOException e) {
+			getConnection().write(new RpbRequest(msg, callback, requests.incrementAndGet()));
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -423,18 +422,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 	@SuppressWarnings({"unchecked"})
 	@Override public void listBuckets(AsyncClientCallback<Set<String>> callback) {
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(new RpbMessage(MSG_ListBucketsReq, null), callback), new EmptyCompletionHandler() {
-				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
-				}
-			});
-		} catch (IOException e) {
+			connection.write(new RpbRequest(new RpbMessage(MSG_ListBucketsReq, null), callback, requests.incrementAndGet()));
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -465,18 +454,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 		RPB.RpbGetBucketReq.Builder b = RPB.RpbGetBucketReq.newBuilder()
 				.setBucket(copyFromUtf8(bucketName));
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(new RpbMessage(MSG_GetBucketReq, b.build()), callback), new EmptyCompletionHandler() {
-				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
-				}
-			});
-		} catch (IOException e) {
+			connection.write(new RpbRequest(new RpbMessage(MSG_GetBucketReq, b.build()), callback, requests.incrementAndGet()));
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -511,18 +490,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 		RPB.RpbListKeysReq.Builder b = RPB.RpbListKeysReq.newBuilder()
 				.setBucket(copyFromUtf8(bucketName));
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(new RpbMessage(MSG_ListKeysReq, b.build()), callback), new EmptyCompletionHandler() {
-				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
-				}
-			});
-		} catch (IOException e) {
+			connection.write(new RpbRequest(new RpbMessage(MSG_ListKeysReq, b.build()), callback, requests.incrementAndGet()));
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -579,18 +548,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 		RPB.RpbSetClientIdReq.Builder b = RPB.RpbSetClientIdReq.newBuilder()
 				.setClientId(copyFromUtf8(clientId));
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(new RpbMessage(MSG_SetClientIdReq, b.build()), callback), new EmptyCompletionHandler() {
-				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
-				}
-			});
-		} catch (IOException e) {
+			connection.write(new RpbRequest(new RpbMessage(MSG_SetClientIdReq, b.build()), callback, requests.incrementAndGet()));
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -623,18 +582,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 	@SuppressWarnings({"unchecked"})
 	@Override public void getClientId(AsyncClientCallback<byte[]> callback) {
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(new RpbMessage(MSG_GetClientIdReq, null), callback), new EmptyCompletionHandler() {
-				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
-				}
-			});
-		} catch (IOException e) {
+			connection.write(new RpbRequest(new RpbMessage(MSG_GetClientIdReq, null), callback, requests.incrementAndGet()));
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -663,18 +612,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 	@SuppressWarnings({"unchecked"})
 	@Override public void getServerInfo(AsyncClientCallback<ServerInfo> callback) {
 		try {
-			final Connection conn = connectionPool.getConnection();
-			conn.write(new RpbRequest(new RpbMessage(MSG_GetServerInfoReq, null), callback), new EmptyCompletionHandler() {
-				@Override public void failed(Throwable throwable) {
-					errorHandler.handleError(throwable);
-					connectionPool.release(conn);
-				}
-
-				@Override public void completed(Object result) {
-					connectionPool.release(conn);
-				}
-			});
-		} catch (IOException e) {
+			connection.write(new RpbRequest(new RpbMessage(MSG_GetServerInfoReq, null), callback, requests.incrementAndGet()));
+		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
 			else
@@ -713,18 +652,15 @@ public class RiakAsyncClient implements RawAsyncClient {
 
 		@SuppressWarnings({"unchecked"})
 		@Override public NextAction handleRead(final FilterChainContext ctx) throws IOException {
-			if (log.isDebugEnabled())
-				log.debug("thread: " + Thread.currentThread().getName());
 			final RpbMessage<?> msg = ctx.getMessage();
-			NextAction suspend = ctx.getSuspendAction();
-			if (log.isDebugEnabled())
-				log.debug(String.format("%s pending requests...", pendingRequests.size()));
-			final RpbRequest pending = pendingRequests.peek();
-			if (null == pendingRequests.peek()) {
-				log.warn("Got a response when no pending requests available!");
+			final RpbRequest pending = pendingRequests.poll();
+			if (null == pending) {
 				return ctx.getStopAction();
-			} else {
-				pendingRequests.remove(pending);
+			}
+			if (log.isDebugEnabled()) {
+				log.debug(String.format("Incoming message: " + msg));
+				log.debug(String.format("Pending request: " + pending));
+//				log.debug(String.format("requests=" + requests.get() + ", responses=" + responses.incrementAndGet()));
 			}
 
 			Object response = null;
@@ -733,6 +669,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 					RPB.RpbErrorResp errorResp = (RPB.RpbErrorResp) msg.getMessage();
 					if (null != pending.getCallback())
 						pending.getCallback().failed(new RiakException(errorResp.getErrmsg().toStringUtf8()));
+					response = new RiakException(errorResp.getErrmsg().toStringUtf8());
 					break;
 				case MSG_DelResp:
 					response = null;
@@ -841,10 +778,12 @@ public class RiakAsyncClient implements RawAsyncClient {
 		private Long start = System.currentTimeMillis();
 		private RpbMessage message;
 		private AsyncClientCallback callback;
+		private int requestNumber = 0;
 
-		private RpbRequest(RpbMessage message, AsyncClientCallback callback) {
+		private RpbRequest(RpbMessage message, AsyncClientCallback callback, int requestNumber) {
 			this.message = message;
 			this.callback = callback;
+			this.requestNumber = requestNumber;
 		}
 
 		public void setStart() {
@@ -861,6 +800,21 @@ public class RiakAsyncClient implements RawAsyncClient {
 
 		public AsyncClientCallback getCallback() {
 			return callback;
+		}
+
+		@Override public String toString() {
+			String s = "RpbRequest{" +
+					"no=" + requestNumber +
+					", start=" + start +
+					", message=" + message +
+					", callback=";
+			try {
+				s += callback.toString();
+			} catch (UnsupportedOperationException ignored) {
+				s += "[proxy]";
+			}
+			s += '}';
+			return s;
 		}
 	}
 

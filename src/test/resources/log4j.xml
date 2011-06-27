@@ -11,13 +11,7 @@
 	</appender>
 
 	<category name="com.jbrisbin">
-		<level value="INFO"/>
-	</category>
-	<category name="org.glassfish.grizzly">
-		<level value="INFO"/>
-	</category>
-	<category name="org.springframework">
-		<level value="WARN"/>
+		<level value="DEBUG"/>
 	</category>
 
 	<!-- Root Logger -->

@@ -47,7 +47,7 @@ public class DelegatingErrorHandler implements ErrorHandler {
 
 	@Override public void handleError(Throwable t) {
 		for (Map.Entry<Class<? extends Throwable>, ErrorHandler> entry : handlers.entrySet()) {
-			if (t.getClass().isAssignableFrom(entry.getKey())) {
+			if (entry.getKey().isAssignableFrom(t.getClass())) {
 				entry.getValue().handleError(t);
 			}
 		}

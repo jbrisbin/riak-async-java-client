@@ -2,8 +2,10 @@ package com.jbrisbin.riak.async
 
 import com.basho.riak.client.raw.RiakResponse
 import com.basho.riak.client.raw.StoreMeta
+import com.jbrisbin.riak.async.raw.AsyncClientCallback
 import com.jbrisbin.riak.pbc.RiakObject
 import groovy.json.JsonBuilder
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import spock.lang.Specification
 
@@ -16,7 +18,7 @@ class RiakAsyncClientSpec extends Specification {
 	RiakAsyncClient client
 
 	def setup() {
-		client = new RiakAsyncClient().setMaxPoolSize(100)
+		client = new RiakAsyncClient()
 	}
 
 	def cleanup() {
@@ -34,7 +36,6 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
-
 	}
 
 	def "Test storing object"() {
@@ -48,7 +49,6 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
-
 	}
 
 	def "Test fetching object"() {
@@ -60,7 +60,6 @@ class RiakAsyncClientSpec extends Specification {
 		null != r
 		r.riakObjects.length > 0
 		null != r.riakObjects[0].valueAsString
-
 	}
 
 	def "Test fetching bucket"() {
@@ -70,7 +69,6 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
-
 	}
 
 	def "Test listing buckets"() {
@@ -81,7 +79,6 @@ class RiakAsyncClientSpec extends Specification {
 		then:
 		null != r
 		r.size() > 0
-
 	}
 
 	def "Test listing keys"() {
@@ -91,7 +88,6 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
-
 	}
 
 	def "Test deleting object"() {
@@ -103,35 +99,49 @@ class RiakAsyncClientSpec extends Specification {
 		then:
 		null != r
 		r.riakObjects.length == 0
-
 	}
 
 	def "Test store throughput"() {
 
-		given: "a range of entries to put and delete"
+		given:
 		def max = 1000
 		def range = 1..max
 		long start = System.currentTimeMillis()
 
-		when: "all $max entries are inserted and deleted"
+		when:
 		def f
-		range.each { i ->
+		CountDownLatch latch = new CountDownLatch(max * 2)
+		AsyncClientCallback callback = new AsyncClientCallback() {
+			@Override void cancelled() {
+
+			}
+
+			@Override void failed(Throwable t) {
+				latch.countDown()
+			}
+
+			@Override void completed(Object result) {
+				latch.countDown()
+			}
+		}
+		range.each {
+			i ->
 			def robj = new RiakObject("store.throughput", "key$i", "text/plain", "content for test entry $i")
-			f = client.store(robj, new StoreMeta(null, null, false))
+			client.store(robj, new StoreMeta(null, null, false), callback)
 		}
-		f.get(2, TimeUnit.MINUTES)
-		range.each { i ->
-			f = client.delete("store.throughput", "key$i")
+		range.each {
+			i ->
+			client.delete("store.throughput", "key$i", callback)
 		}
-		f.get(2, TimeUnit.MINUTES)
+		latch.await(15, TimeUnit.SECONDS)
+
 		long elapsed = System.currentTimeMillis() - start
 		long throughput = (max * 2) / (elapsed / 1000)
 		println "ops/sec: $throughput"
 
-		then: "throughput should be > 0"
+		then:
 		throughput > 0
 	}
-
 }
 
 class JsonTest {

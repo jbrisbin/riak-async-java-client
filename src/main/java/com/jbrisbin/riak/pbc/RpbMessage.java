@@ -37,4 +37,10 @@ public class RpbMessage<T extends Message> {
 		return message;
 	}
 
+	@Override public String toString() {
+		return "RpbMessage{" +
+				"code=" + code +
+				", message=" + message +
+				'}';
+	}
 }

@@ -16,7 +16,9 @@ package com.jbrisbin.riak.async;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 
+import com.basho.riak.client.raw.StoreMeta;
 import com.jbrisbin.riak.pbc.RiakObject;
 import org.junit.After;
 import org.junit.Before;
@@ -40,11 +42,16 @@ public class RiakAsyncClientTests {
 	}
 
 	@Test
-	public void testMultipleRequestsAtOnce() throws IOException, ExecutionException, InterruptedException {
+	public void testMultipleRequestsAtOnce() throws IOException,
+			ExecutionException, InterruptedException {
+		Future f = null;
 		for (int i = 0; i < 100; i++) {
-			RiakObject robj = new RiakObject("store.throughput", "key" + i, "text/plain", "this is content from test " + i);
-//			client.store(robj, new StoreMeta(null, null, false)).get();
+			RiakObject robj = new RiakObject("store.throughput", "key" + i,
+					"text/plain", "this is content from test " + i);
+			f = client.store(robj, new StoreMeta(null, null, false));
 		}
+		if (null != f)
+			f.get();
 	}
 
 }

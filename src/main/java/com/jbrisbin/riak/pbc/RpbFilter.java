@@ -18,6 +18,7 @@ import static com.basho.riak.pbc.RiakMessageCodes.*;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.basho.riak.pbc.RPB;
 import com.google.protobuf.Message;
@@ -38,6 +39,8 @@ public class RpbFilter extends BaseFilter {
 
 	private Logger log = LoggerFactory.getLogger(getClass());
 	private HeapMemoryManager heap;
+	private AtomicInteger requests = new AtomicInteger(0);
+	private AtomicInteger responses = new AtomicInteger(0);
 
 	public RpbFilter(HeapMemoryManager heap) {
 		this.heap = heap;
@@ -49,6 +52,8 @@ public class RpbFilter extends BaseFilter {
 		int code = buffer.get();
 		if (buffer.remaining() < (size - 1)) {
 			buffer.rewind();
+			if (log.isDebugEnabled())
+				log.debug("Not enough data yet: " + buffer.remaining() + " (need " + size + ")");
 			return ctx.getStopAction(buffer);
 		}
 
@@ -97,7 +102,8 @@ public class RpbFilter extends BaseFilter {
 				ctx.setMessage(null);
 		}
 		buffer.tryDispose();
-		log.debug("read buffer...invoking next: " + Thread.currentThread().getName());
+		log.debug("read buffer on thread " + Thread.currentThread().getName());
+		log.debug(String.format("req=%s, resp=%s", requests.get(), responses.incrementAndGet()));
 
 		return ctx.getInvokeAction();
 	}
@@ -150,7 +156,8 @@ public class RpbFilter extends BaseFilter {
 		buffer.trim();
 		buffer.rewind();
 		ctx.setMessage(buffer);
-		log.debug("wrote buffer...invoking next: " + Thread.currentThread().getName());
+		log.debug("wrote buffer on thread " + Thread.currentThread().getName());
+		log.debug(String.format("req=%s, resp=%s", requests.incrementAndGet(), responses.get()));
 
 		return ctx.getInvokeAction();
 	}
