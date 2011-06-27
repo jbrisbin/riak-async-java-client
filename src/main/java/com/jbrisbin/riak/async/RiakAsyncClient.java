@@ -14,8 +14,8 @@
 
 package com.jbrisbin.riak.async;
 
-import static com.basho.riak.pbc.RiakMessageCodes.*;
 import static com.google.protobuf.ByteString.*;
+import static com.jbrisbin.riak.pbc.RiakMessageCodes.*;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
