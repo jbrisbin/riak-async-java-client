@@ -86,7 +86,6 @@ public class RiakAsyncClient implements RawAsyncClient {
 	private Long timeout = 30L;
 	private DelegatingErrorHandler errorHandler = new DelegatingErrorHandler();
 	private ExecutorService workerPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 2);
-	//	private ExecutorService workerPool = Executors.newCachedThreadPool();
 	private HeapMemoryManager heap = new HeapMemoryManager();
 	private TCPNIOTransport transport = TCPNIOTransportBuilder.newInstance().build();
 	private FilterChain filterChain;
@@ -94,8 +93,6 @@ public class RiakAsyncClient implements RawAsyncClient {
 	private int maxConnectionRetries = 5;
 	private AtomicInteger retries = new AtomicInteger(0);
 	private LinkedBlockingQueue<RpbRequest> pendingRequests = new LinkedBlockingQueue<RpbRequest>();
-	private AtomicInteger requests = new AtomicInteger(0);
-	private AtomicInteger responses = new AtomicInteger(0);
 
 	public RiakAsyncClient() {
 		start();
@@ -105,6 +102,12 @@ public class RiakAsyncClient implements RawAsyncClient {
 		this.host = host;
 		this.port = port;
 		start();
+	}
+
+	public RiakAsyncClient(String host, Integer port, Long timeout) {
+		this.host = host;
+		this.port = port;
+		this.timeout = timeout;
 	}
 
 	public RiakAsyncClient registerErrorHandler(Class<? extends Throwable> t, ErrorHandler errorHandler) {
@@ -192,7 +195,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 		ThreadPoolConfig config = ThreadPoolConfig.defaultConfig();
 		config.setPoolName("vblob-gw");
 		config.setCorePoolSize(PROCESSORS);
-		config.setMaxPoolSize(PROCESSORS * 4);
+		config.setMaxPoolSize(PROCESSORS * 2);
 		config.setKeepAliveTime(timeout, TimeUnit.SECONDS);
 		transport.setWorkerThreadPoolConfig(config);
 		transport.setIOStrategy(WorkerThreadIOStrategy.getInstance());
@@ -269,7 +272,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 		}
 		RpbMessage<RPB.RpbGetReq> msg = new RpbMessage<RPB.RpbGetReq>(MSG_GetReq, b.build());
 		try {
-			connection.write(new RpbRequest(msg, callback, requests.incrementAndGet()));
+			connection.write(new RpbRequest(msg, callback));
 		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
@@ -335,7 +338,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 		}
 		RpbMessage<RPB.RpbPutReq> msg = new RpbMessage<RPB.RpbPutReq>(MSG_PutReq, b.build());
 		try {
-			getConnection().write(new RpbRequest(msg, callback, requests.incrementAndGet()), new EmptyCompletionHandler() {
+			getConnection().write(new RpbRequest(msg, callback), new EmptyCompletionHandler() {
 				@Override public void failed(Throwable throwable) {
 					retries.incrementAndGet();
 					if (retries.get() < maxConnectionRetries) {
@@ -392,7 +395,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 			b.setRw(deleteQuorum);
 		RpbMessage<RPB.RpbDelReq> msg = new RpbMessage<RPB.RpbDelReq>(MSG_DelReq, b.build());
 		try {
-			getConnection().write(new RpbRequest(msg, callback, requests.incrementAndGet()));
+			getConnection().write(new RpbRequest(msg, callback));
 		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
@@ -422,7 +425,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 	@SuppressWarnings({"unchecked"})
 	@Override public void listBuckets(AsyncClientCallback<Set<String>> callback) {
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_ListBucketsReq, null), callback, requests.incrementAndGet()));
+			connection.write(new RpbRequest(new RpbMessage(MSG_ListBucketsReq, null), callback));
 		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
@@ -454,7 +457,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 		RPB.RpbGetBucketReq.Builder b = RPB.RpbGetBucketReq.newBuilder()
 				.setBucket(copyFromUtf8(bucketName));
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_GetBucketReq, b.build()), callback, requests.incrementAndGet()));
+			connection.write(new RpbRequest(new RpbMessage(MSG_GetBucketReq, b.build()), callback));
 		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
@@ -490,7 +493,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 		RPB.RpbListKeysReq.Builder b = RPB.RpbListKeysReq.newBuilder()
 				.setBucket(copyFromUtf8(bucketName));
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_ListKeysReq, b.build()), callback, requests.incrementAndGet()));
+			connection.write(new RpbRequest(new RpbMessage(MSG_ListKeysReq, b.build()), callback));
 		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
@@ -548,7 +551,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 		RPB.RpbSetClientIdReq.Builder b = RPB.RpbSetClientIdReq.newBuilder()
 				.setClientId(copyFromUtf8(clientId));
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_SetClientIdReq, b.build()), callback, requests.incrementAndGet()));
+			connection.write(new RpbRequest(new RpbMessage(MSG_SetClientIdReq, b.build()), callback));
 		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
@@ -582,7 +585,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 	@SuppressWarnings({"unchecked"})
 	@Override public void getClientId(AsyncClientCallback<byte[]> callback) {
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_GetClientIdReq, null), callback, requests.incrementAndGet()));
+			connection.write(new RpbRequest(new RpbMessage(MSG_GetClientIdReq, null), callback));
 		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
@@ -612,7 +615,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 	@SuppressWarnings({"unchecked"})
 	@Override public void getServerInfo(AsyncClientCallback<ServerInfo> callback) {
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_GetServerInfoReq, null), callback, requests.incrementAndGet()));
+			connection.write(new RpbRequest(new RpbMessage(MSG_GetServerInfoReq, null), callback));
 		} catch (Exception e) {
 			if (null != callback)
 				callback.failed(e);
@@ -778,12 +781,10 @@ public class RiakAsyncClient implements RawAsyncClient {
 		private Long start = System.currentTimeMillis();
 		private RpbMessage message;
 		private AsyncClientCallback callback;
-		private int requestNumber = 0;
 
-		private RpbRequest(RpbMessage message, AsyncClientCallback callback, int requestNumber) {
+		private RpbRequest(RpbMessage message, AsyncClientCallback callback) {
 			this.message = message;
 			this.callback = callback;
-			this.requestNumber = requestNumber;
 		}
 
 		public void setStart() {
@@ -804,8 +805,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 
 		@Override public String toString() {
 			String s = "RpbRequest{" +
-					"no=" + requestNumber +
-					", start=" + start +
+					"start=" + start +
 					", message=" + message +
 					", callback=";
 			try {
