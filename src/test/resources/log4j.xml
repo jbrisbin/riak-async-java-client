@@ -11,7 +11,7 @@
 	</appender>
 
 	<category name="com.jbrisbin">
-		<level value="DEBUG"/>
+		<level value="INFO"/>
 	</category>
 
 	<!-- Root Logger -->

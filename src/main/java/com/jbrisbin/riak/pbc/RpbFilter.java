@@ -37,6 +37,8 @@ import org.slf4j.LoggerFactory;
  */
 public class RpbFilter extends BaseFilter {
 
+	private static final int HEADER_SIZE = 4;
+
 	private Logger log = LoggerFactory.getLogger(getClass());
 	private HeapMemoryManager heap;
 	private AtomicInteger requests = new AtomicInteger(0);
@@ -48,7 +50,18 @@ public class RpbFilter extends BaseFilter {
 
 	@Override public NextAction handleRead(FilterChainContext ctx) throws IOException {
 		Buffer buffer = ctx.getMessage();
+		if (buffer.remaining() < HEADER_SIZE) {
+			return ctx.getStopAction(buffer);
+		}
+
+		int pos = buffer.position();
 		int size = buffer.getInt();
+		if (buffer.remaining() < size) {
+			buffer.position(pos);
+			return ctx.getStopAction(buffer);
+		}
+		Buffer remainder = (buffer.remaining() > size ? buffer.split(pos + HEADER_SIZE + size) : null);
+
 		int code = buffer.get();
 		if (buffer.remaining() < (size - 1)) {
 			buffer.rewind();
@@ -105,7 +118,7 @@ public class RpbFilter extends BaseFilter {
 		log.debug("read buffer on thread " + Thread.currentThread().getName());
 		log.debug(String.format("req=%s, resp=%s", requests.get(), responses.incrementAndGet()));
 
-		return ctx.getInvokeAction();
+		return ctx.getInvokeAction(remainder);
 	}
 
 	@Override public NextAction handleWrite(FilterChainContext ctx) throws IOException {

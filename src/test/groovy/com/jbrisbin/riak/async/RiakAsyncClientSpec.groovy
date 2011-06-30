@@ -36,6 +36,7 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
+
 	}
 
 	def "Test storing object"() {
@@ -49,6 +50,7 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
+
 	}
 
 	def "Test fetching object"() {
@@ -60,6 +62,7 @@ class RiakAsyncClientSpec extends Specification {
 		null != r
 		r.riakObjects.length > 0
 		null != r.riakObjects[0].valueAsString
+
 	}
 
 	def "Test fetching bucket"() {
@@ -69,6 +72,7 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
+
 	}
 
 	def "Test listing buckets"() {
@@ -79,6 +83,7 @@ class RiakAsyncClientSpec extends Specification {
 		then:
 		null != r
 		r.size() > 0
+
 	}
 
 	def "Test listing keys"() {
@@ -88,6 +93,7 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
+
 	}
 
 	def "Test deleting object"() {
@@ -99,6 +105,7 @@ class RiakAsyncClientSpec extends Specification {
 		then:
 		null != r
 		r.riakObjects.length == 0
+
 	}
 
 	def "Test store throughput"() {
@@ -117,6 +124,7 @@ class RiakAsyncClientSpec extends Specification {
 			}
 
 			@Override void failed(Throwable t) {
+				t.printStackTrace()
 				latch.countDown()
 			}
 
@@ -141,7 +149,9 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		throughput > 0
+
 	}
+
 }
 
 class JsonTest {
