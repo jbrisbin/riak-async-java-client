@@ -32,14 +32,18 @@ public class Promise<T> implements Future<T> {
 	private static final ResourceBundle messages = ResourceBundle.getBundle(
 			"com.jbrisbin.riak.async.RiakAsyncClientResources");
 
+	private final String handlerMutex = "handler";
+
 	private ArrayBlockingQueue<T> resultQueue = new ArrayBlockingQueue<T>(1);
 	private AtomicReference<CompletionHandler<T>> completionHandler = new AtomicReference<CompletionHandler<T>>();
 	private AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
 
 	public void setCompletionHandler(CompletionHandler<T> completionHandler) {
-		this.completionHandler.set(completionHandler);
-		if (!resultQueue.isEmpty()) {
-			completionHandler.complete(resultQueue.peek());
+		synchronized (handlerMutex) {
+			this.completionHandler.set(completionHandler);
+			if (!resultQueue.isEmpty()) {
+				completionHandler.complete(resultQueue.peek());
+			}
 		}
 	}
 
@@ -62,15 +66,17 @@ public class Promise<T> implements Future<T> {
 	 * @return true if possible, false if result has already been set
 	 */
 	public boolean setResult(T obj) {
-		if (null != resultQueue && resultQueue.size() == 0) {
-			boolean b = resultQueue.offer(obj);
-			CompletionHandler<T> handler = completionHandler.get();
-			if (null != handler) {
-				handler.complete(obj);
+		synchronized (handlerMutex) {
+			if (null != resultQueue && resultQueue.size() == 0) {
+				boolean b = resultQueue.offer(obj);
+				CompletionHandler<T> handler = completionHandler.get();
+				if (null != handler) {
+					handler.complete(obj);
+				}
+				return b;
+			} else {
+				return false;
 			}
-			return b;
-		} else {
-			return false;
 		}
 	}
 
