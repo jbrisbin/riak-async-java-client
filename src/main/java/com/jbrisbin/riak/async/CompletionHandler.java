@@ -12,17 +12,17 @@
  * the License.
  */
 
-package com.jbrisbin.riak.async.raw;
+package com.jbrisbin.riak.async;
 
 /**
  * @author Jon Brisbin <jon@jbrisbin.com>
  */
-public interface AsyncClientCallback<T> {
+public interface CompletionHandler<T> {
 
-	void cancelled();
+	void canceled();
 
 	void failed(Throwable t);
 
-	void completed(T result);
+	void complete(T obj);
 
 }

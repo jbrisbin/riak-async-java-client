@@ -28,7 +28,6 @@ import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -47,7 +46,6 @@ import com.basho.riak.client.raw.query.MapReduceTimeoutException;
 import com.basho.riak.client.util.CharsetUtils;
 import com.basho.riak.pbc.RPB;
 import com.google.protobuf.ByteString;
-import com.jbrisbin.riak.async.raw.AsyncClientCallback;
 import com.jbrisbin.riak.async.raw.RawAsyncClient;
 import com.jbrisbin.riak.async.raw.ServerInfo;
 import com.jbrisbin.riak.async.util.DelegatingErrorHandler;
@@ -63,8 +61,6 @@ import org.glassfish.grizzly.filterchain.FilterChainBuilder;
 import org.glassfish.grizzly.filterchain.FilterChainContext;
 import org.glassfish.grizzly.filterchain.NextAction;
 import org.glassfish.grizzly.filterchain.TransportFilter;
-import org.glassfish.grizzly.impl.FutureImpl;
-import org.glassfish.grizzly.impl.SafeFutureImpl;
 import org.glassfish.grizzly.memory.HeapMemoryManager;
 import org.glassfish.grizzly.nio.transport.TCPNIOTransport;
 import org.glassfish.grizzly.nio.transport.TCPNIOTransportBuilder;
@@ -192,11 +188,12 @@ public class RiakAsyncClient implements RawAsyncClient {
 
 		transport.setKeepAlive(true);
 		transport.setTcpNoDelay(true);
-		ThreadPoolConfig config = ThreadPoolConfig.defaultConfig();
-		config.setPoolName("vblob-gw");
-		config.setCorePoolSize(PROCESSORS);
-		config.setMaxPoolSize(PROCESSORS * 2);
-		config.setKeepAliveTime(timeout, TimeUnit.SECONDS);
+		ThreadPoolConfig config = ThreadPoolConfig
+				.defaultConfig()
+				.setPoolName("riak-async-client")
+				.setCorePoolSize(PROCESSORS)
+				.setMaxPoolSize(PROCESSORS)
+				.setKeepAliveTime(timeout, TimeUnit.SECONDS);
 		transport.setWorkerThreadPoolConfig(config);
 		transport.setIOStrategy(WorkerThreadIOStrategy.getInstance());
 		transport.setProcessor(filterChain);
@@ -236,91 +233,34 @@ public class RiakAsyncClient implements RawAsyncClient {
 		return connection;
 	}
 
-	@Override public Future<RiakResponse> fetch(String bucket, String key) throws IOException {
+	@Override public Promise<RiakResponse> fetch(String bucket, String key) throws IOException {
 		return fetch(bucket, key, -1);
 	}
 
-	@Override public void fetch(String bucket, String key, final AsyncClientCallback<RiakResponse> callback) {
-		fetch(bucket, key, -1, callback);
-	}
-
-	@Override public Future<RiakResponse> fetch(String bucket, String key, int readQuorum) throws IOException {
-		final FutureImpl<RiakResponse> future = SafeFutureImpl.create();
-		fetch(bucket, key, -1, new AsyncClientCallback<RiakResponse>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(RiakResponse result) {
-				future.result(result);
-			}
-		});
-		return future;
-	}
-
 	@SuppressWarnings({"unchecked"})
-	@Override public void fetch(String bucket, String key, int readQuorum, AsyncClientCallback<RiakResponse> callback) {
+	@Override public Promise<RiakResponse> fetch(String bucket, String key, int readQuorum) throws IOException {
 		RPB.RpbGetReq.Builder b = RPB.RpbGetReq.newBuilder()
-				.setBucket(copyFromUtf8(bucket))
-				.setKey(copyFromUtf8(key));
+																					 .setBucket(copyFromUtf8(bucket))
+																					 .setKey(copyFromUtf8(key));
 		if (readQuorum > 0) {
 			b.setR(readQuorum);
 		}
 		RpbMessage<RPB.RpbGetReq> msg = new RpbMessage<RPB.RpbGetReq>(MSG_GetReq, b.build());
+		final Promise<RiakResponse> promise = new Promise<RiakResponse>();
 		try {
-			connection.write(new RpbRequest(msg, callback));
+			getConnection().write(new RpbRequest(msg, promise));
 		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
+			errorHandler.handleError(e);
 		}
-	}
-
-	@Override public Future<RiakResponse> store(IRiakObject object, StoreMeta storeMeta) throws IOException {
-		final FutureImpl<RiakResponse> future = SafeFutureImpl.create();
-		store(object, storeMeta, new AsyncClientCallback<RiakResponse>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(RiakResponse result) {
-				future.result(result);
-			}
-		});
-		return future;
-	}
-
-	@Override public void store(IRiakObject object, final AsyncClientCallback<Void> callback) {
-		store(object, null, new AsyncClientCallback<RiakResponse>() {
-			@Override public void cancelled() {
-				callback.cancelled();
-			}
-
-			@Override public void failed(Throwable t) {
-				callback.failed(t);
-			}
-
-			@Override public void completed(RiakResponse result) {
-				callback.completed(null);
-			}
-		});
+		return promise;
 	}
 
 	@SuppressWarnings({"unchecked"})
 	@Override
-	public void store(final IRiakObject object, final StoreMeta storeMeta, final AsyncClientCallback<RiakResponse> callback) {
+	public Promise<RiakResponse> store(final IRiakObject object, final StoreMeta storeMeta) {
 		RPB.RpbPutReq.Builder b = RPB.RpbPutReq.newBuilder()
-				.setBucket(copyFromUtf8(object.getBucket()))
-				.setKey(copyFromUtf8(object.getKey()));
+																					 .setBucket(copyFromUtf8(object.getBucket()))
+																					 .setKey(copyFromUtf8(object.getKey()));
 		if (null != object.getVClock())
 			b.setVclock(copyFrom(object.getVClock().getBytes()));
 		if (object instanceof RiakObject) {
@@ -337,208 +277,101 @@ public class RiakAsyncClient implements RawAsyncClient {
 				b.setW(storeMeta.getW());
 		}
 		RpbMessage<RPB.RpbPutReq> msg = new RpbMessage<RPB.RpbPutReq>(MSG_PutReq, b.build());
+		final Promise<RiakResponse> promise = new Promise<RiakResponse>();
 		try {
-			getConnection().write(new RpbRequest(msg, callback), new EmptyCompletionHandler() {
+			getConnection().write(new RpbRequest(msg, promise), new EmptyCompletionHandler() {
 				@Override public void failed(Throwable throwable) {
 					retries.incrementAndGet();
 					if (retries.get() < maxConnectionRetries) {
 						if (log.isDebugEnabled())
 							log.debug("Retrying request: " + object);
-						store(object, storeMeta, callback);
+						store(object, storeMeta);
 					}
 				}
 			});
 		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
+			errorHandler.handleError(e);
 		}
+		return promise;
 	}
 
-	@Override public void store(IRiakObject object) throws IOException {
-		store(object, null, null);
+	@Override public Promise<RiakResponse> store(IRiakObject object) throws IOException {
+		return store(object, null);
 	}
 
-	@Override public Future<Void> delete(String bucket, String key) throws IOException {
+	@Override public Promise<Void> delete(String bucket, String key) throws IOException {
 		return delete(bucket, key, -1);
 	}
 
-	@Override public Future<Void> delete(String bucket, String key, int deleteQuorum) throws IOException {
-		final FutureImpl<Void> future = SafeFutureImpl.create();
-		delete(bucket, key, deleteQuorum, new AsyncClientCallback<Void>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(Void result) {
-				future.result(result);
-			}
-		});
-		return future;
-	}
-
-	@Override public void delete(String bucket, String key, AsyncClientCallback<Void> callback) {
-		delete(bucket, key, -1, callback);
-	}
-
 	@SuppressWarnings({"unchecked"})
-	@Override public void delete(String bucket, String key, int deleteQuorum, AsyncClientCallback<Void> callback) {
+	@Override public Promise<Void> delete(String bucket, String key, int deleteQuorum) {
 		RPB.RpbDelReq.Builder b = RPB.RpbDelReq.newBuilder()
-				.setBucket(copyFromUtf8(bucket))
-				.setKey(copyFromUtf8(key));
+																					 .setBucket(copyFromUtf8(bucket))
+																					 .setKey(copyFromUtf8(key));
 		if (deleteQuorum > -1)
 			b.setRw(deleteQuorum);
 		RpbMessage<RPB.RpbDelReq> msg = new RpbMessage<RPB.RpbDelReq>(MSG_DelReq, b.build());
+		final Promise<Void> promise = new Promise<Void>();
 		try {
-			getConnection().write(new RpbRequest(msg, callback));
+			getConnection().write(new RpbRequest(msg, promise));
 		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
+			errorHandler.handleError(e);
 		}
-	}
-
-	@Override public Future<Set<String>> listBuckets() throws IOException {
-		final FutureImpl<Set<String>> future = SafeFutureImpl.create();
-		listBuckets(new AsyncClientCallback<Set<String>>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(Set<String> result) {
-				future.result(result);
-			}
-		});
-		return future;
+		return promise;
 	}
 
 	@SuppressWarnings({"unchecked"})
-	@Override public void listBuckets(AsyncClientCallback<Set<String>> callback) {
+	@Override public Promise<Set<String>> listBuckets() {
+		Promise<Set<String>> promise = new Promise<Set<String>>();
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_ListBucketsReq, null), callback));
+			connection.write(new RpbRequest(new RpbMessage(MSG_ListBucketsReq, null), promise));
 		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
+			errorHandler.handleError(e);
 		}
-	}
-
-	@Override public Future<BucketProperties> fetchBucket(String bucketName) throws IOException {
-		final FutureImpl<BucketProperties> future = SafeFutureImpl.create();
-		fetchBucket(bucketName, new AsyncClientCallback<BucketProperties>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(BucketProperties result) {
-				future.result(result);
-			}
-		});
-		return future;
+		return promise;
 	}
 
 	@SuppressWarnings({"unchecked"})
-	@Override public void fetchBucket(String bucketName, AsyncClientCallback<BucketProperties> callback) {
+	@Override public Promise<BucketProperties> fetchBucket(String bucketName) {
 		RPB.RpbGetBucketReq.Builder b = RPB.RpbGetBucketReq.newBuilder()
-				.setBucket(copyFromUtf8(bucketName));
+																											 .setBucket(copyFromUtf8(bucketName));
+		Promise<BucketProperties> promise = new Promise<BucketProperties>();
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_GetBucketReq, b.build()), callback));
+			connection.write(new RpbRequest(new RpbMessage(MSG_GetBucketReq, b.build()), promise));
 		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
+			errorHandler.handleError(e);
 		}
+		return promise;
 	}
 
-	@Override public void updateBucket(String name, BucketProperties bucketProperties) throws IOException {
+	@Override public Promise<Void> updateBucket(String name, BucketProperties bucketProperties) throws IOException {
 		throw new UnsupportedOperationException("Updating bucket properties not yet supported");
 	}
 
-	@Override public Future<Iterable<String>> listKeys(String bucketName) throws IOException {
-		final FutureImpl<Iterable<String>> future = SafeFutureImpl.create();
-		listKeys(bucketName, new AsyncClientCallback<Iterable<String>>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(Iterable<String> result) {
-				future.result(result);
-			}
-		});
-		return future;
-	}
-
 	@SuppressWarnings({"unchecked"})
-	@Override public void listKeys(String bucketName, AsyncClientCallback<Iterable<String>> callback) {
+	@Override public Promise<Iterable<String>> listKeys(String bucketName) throws IOException {
 		RPB.RpbListKeysReq.Builder b = RPB.RpbListKeysReq.newBuilder()
-				.setBucket(copyFromUtf8(bucketName));
+																										 .setBucket(copyFromUtf8(bucketName));
+		Promise<Iterable<String>> promise = new Promise<Iterable<String>>();
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_ListKeysReq, b.build()), callback));
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_ListKeysReq, b.build()), promise));
 		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
+			errorHandler.handleError(e);
 		}
+		return promise;
 	}
 
-	@Override public Future<WalkResult> linkWalk(LinkWalkSpec linkWalkSpec) throws IOException {
-		throw new UnsupportedOperationException("Link walking not yet supported");
-	}
-
-	@Override public void linkWalk(LinkWalkSpec linkWalkSpec, AsyncClientCallback<WalkResult> callback) {
+	@Override public Promise<WalkResult> linkWalk(LinkWalkSpec linkWalkSpec) throws IOException {
 		throw new UnsupportedOperationException("Link walking not yet supported");
 	}
 
 	@Override
-	public Future<MapReduceResult> mapReduce(MapReduceSpec spec) throws IOException, MapReduceTimeoutException {
+	public Promise<MapReduceResult> mapReduce(MapReduceSpec spec) throws IOException, MapReduceTimeoutException {
 		throw new UnsupportedOperationException("Map/Reduce not yet supported");
-	}
-
-	@Override public void mapReduce(MapReduceSpec spec, AsyncClientCallback<MapReduceResult> callback) {
-		throw new UnsupportedOperationException("Map/Reduce not yet supported");
-	}
-
-	@Override public Future<byte[]> generateAndSetClientId() throws IOException {
-		final FutureImpl<byte[]> future = SafeFutureImpl.create();
-		generateAndSetClientId(new AsyncClientCallback<byte[]>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(byte[] result) {
-				future.result(result);
-			}
-		});
-		return future;
 	}
 
 	@SuppressWarnings({"unchecked"})
-	@Override public void generateAndSetClientId(AsyncClientCallback<byte[]> callback) {
+	@Override public Promise<byte[]> generateAndSetClientId() throws IOException {
 		SecureRandom sr;
 		try {
 			sr = SecureRandom.getInstance("SHA1PRNG");
@@ -549,79 +382,40 @@ public class RiakAsyncClient implements RawAsyncClient {
 		sr.nextBytes(data);
 		String clientId = CharsetUtils.asString(Base64.encodeBase64Chunked(data), CharsetUtils.ISO_8859_1);
 		RPB.RpbSetClientIdReq.Builder b = RPB.RpbSetClientIdReq.newBuilder()
-				.setClientId(copyFromUtf8(clientId));
+																													 .setClientId(copyFromUtf8(clientId));
+		Promise<byte[]> promise = new Promise<byte[]>();
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_SetClientIdReq, b.build()), callback));
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_SetClientIdReq, b.build()), promise));
 		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
+			errorHandler.handleError(e);
 		}
+		return promise;
 	}
 
 	@Override public void setClientId(byte[] clientId) throws IOException {
 		throw new UnsupportedOperationException("Setting custom client IDs not yet supported");
 	}
 
-	@Override public Future<byte[]> getClientId() throws IOException {
-		final FutureImpl<byte[]> future = SafeFutureImpl.create();
-		getClientId(new AsyncClientCallback<byte[]>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(byte[] result) {
-				future.result(result);
-			}
-		});
-		return future;
+	@SuppressWarnings({"unchecked"})
+	@Override public Promise<byte[]> getClientId() throws IOException {
+		Promise<byte[]> promise = new Promise<byte[]>();
+		try {
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_GetClientIdReq, null), promise));
+		} catch (Exception e) {
+			errorHandler.handleError(e);
+		}
+		return promise;
 	}
 
 	@SuppressWarnings({"unchecked"})
-	@Override public void getClientId(AsyncClientCallback<byte[]> callback) {
+	@Override public Promise<ServerInfo> getServerInfo() throws IOException {
+		Promise<ServerInfo> promise = new Promise<ServerInfo>();
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_GetClientIdReq, null), callback));
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_GetServerInfoReq, null), promise));
 		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
+			errorHandler.handleError(e);
 		}
-	}
-
-	@Override public Future<ServerInfo> getServerInfo() throws IOException {
-		final FutureImpl<ServerInfo> future = SafeFutureImpl.create();
-		getServerInfo(new AsyncClientCallback<ServerInfo>() {
-			@Override public void cancelled() {
-				future.cancel(true);
-			}
-
-			@Override public void failed(Throwable t) {
-				future.failure(t);
-			}
-
-			@Override public void completed(ServerInfo result) {
-				future.result(result);
-			}
-		});
-		return future;
-	}
-
-	@SuppressWarnings({"unchecked"})
-	@Override public void getServerInfo(AsyncClientCallback<ServerInfo> callback) {
-		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_GetServerInfoReq, null), callback));
-		} catch (Exception e) {
-			if (null != callback)
-				callback.failed(e);
-			else
-				errorHandler.handleError(e);
-		}
+		return promise;
 	}
 
 	private List<RiakObject> createRiakObjectsFromContent(List<RPB.RpbContent> contents) {
@@ -637,14 +431,6 @@ public class RiakAsyncClient implements RawAsyncClient {
 			robjs.add(robj);
 		}
 		return robjs;
-	}
-
-	private <T> void submitCallback(final AsyncClientCallback<T> callback, final T result) {
-		workerPool.submit(new Runnable() {
-			@Override public void run() {
-				callback.completed(result);
-			}
-		});
 	}
 
 	private class PendingRequestFilter extends BaseFilter {
@@ -670,14 +456,12 @@ public class RiakAsyncClient implements RawAsyncClient {
 			switch (msg.getCode()) {
 				case MSG_ErrorResp:
 					RPB.RpbErrorResp errorResp = (RPB.RpbErrorResp) msg.getMessage();
-					if (null != pending.getCallback())
-						pending.getCallback().failed(new RiakException(errorResp.getErrmsg().toStringUtf8()));
+					pending.getPromise().setFailure(new RiakException(errorResp.getErrmsg().toStringUtf8()));
 					response = new RiakException(errorResp.getErrmsg().toStringUtf8());
 					break;
 				case MSG_DelResp:
 					response = null;
-					if (null != pending.getCallback())
-						pending.getCallback().completed(null);
+					pending.getPromise().setResult(Void.INSTANCE);
 					break;
 				case MSG_GetBucketResp:
 					RPB.RpbGetBucketResp bucketResp = (RPB.RpbGetBucketResp) msg.getMessage();
@@ -709,7 +493,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 					RPB.RpbGetServerInfoResp serverInfoResp = (RPB.RpbGetServerInfoResp) msg.getMessage();
 					if (log.isDebugEnabled())
 						log.debug(String.format("GetServerInfo response: %s", serverInfoResp));
-					response = new ServerInfo(serverInfoResp.getNode().toStringUtf8(), serverInfoResp.getServerVersion().toStringUtf8());
+					response = new ServerInfo(serverInfoResp.getNode().toStringUtf8(),
+																		serverInfoResp.getServerVersion().toStringUtf8());
 					break;
 				case MSG_ListBucketsResp:
 					RPB.RpbListBucketsResp listBucketsResp = (RPB.RpbListBucketsResp) msg.getMessage();
@@ -750,8 +535,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 					break;
 			}
 			// Maybe call callback
-			if (null != response && null != pending.getCallback())
-				pending.getCallback().completed(response);
+			if (null != response)
+				pending.getPromise().setResult(response);
 
 			if (log.isDebugEnabled()) {
 				long elapsed = System.currentTimeMillis() - pending.getStart();
@@ -777,14 +562,14 @@ public class RiakAsyncClient implements RawAsyncClient {
 		}
 	}
 
-	private class RpbRequest {
+	private class RpbRequest<T> {
 		private Long start = System.currentTimeMillis();
 		private RpbMessage message;
-		private AsyncClientCallback callback;
+		private Promise<T> promise;
 
-		private RpbRequest(RpbMessage message, AsyncClientCallback callback) {
+		private RpbRequest(RpbMessage message, Promise<T> promise) {
 			this.message = message;
-			this.callback = callback;
+			this.promise = promise;
 		}
 
 		public void setStart() {
@@ -799,21 +584,15 @@ public class RiakAsyncClient implements RawAsyncClient {
 			return message;
 		}
 
-		public AsyncClientCallback getCallback() {
-			return callback;
+		public Promise<T> getPromise() {
+			return promise;
 		}
 
 		@Override public String toString() {
 			String s = "RpbRequest{" +
 					"start=" + start +
 					", message=" + message +
-					", callback=";
-			try {
-				s += callback.toString();
-			} catch (UnsupportedOperationException ignored) {
-				s += "[proxy]";
-			}
-			s += '}';
+					", promise=" + promise + "}";
 			return s;
 		}
 	}

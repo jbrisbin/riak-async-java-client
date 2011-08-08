@@ -16,7 +16,6 @@ package com.jbrisbin.riak.async.raw;
 
 import java.io.IOException;
 import java.util.Set;
-import java.util.concurrent.Future;
 
 import com.basho.riak.client.IRiakObject;
 import com.basho.riak.client.bucket.BucketProperties;
@@ -27,6 +26,8 @@ import com.basho.riak.client.raw.StoreMeta;
 import com.basho.riak.client.raw.query.LinkWalkSpec;
 import com.basho.riak.client.raw.query.MapReduceSpec;
 import com.basho.riak.client.raw.query.MapReduceTimeoutException;
+import com.jbrisbin.riak.async.Promise;
+import com.jbrisbin.riak.async.Void;
 
 /**
  * @author Jon Brisbin <jon@jbrisbin.com>
@@ -41,9 +42,7 @@ public interface RawAsyncClient {
 	 * @return a {@link RiakResponse}
 	 * @throws IOException
 	 */
-	Future<RiakResponse> fetch(String bucket, String key) throws IOException;
-
-	void fetch(String bucket, String key, AsyncClientCallback<RiakResponse> callback);
+	Promise<RiakResponse> fetch(String bucket, String key) throws IOException;
 
 	/**
 	 * Fetch data from the given <code>bukcet/key</code> with read quorum
@@ -55,9 +54,7 @@ public interface RawAsyncClient {
 	 * @return a {@link RiakResponse}
 	 * @throws IOException
 	 */
-	Future<RiakResponse> fetch(String bucket, String key, int readQuorum) throws IOException;
-
-	void fetch(String bucket, String key, int readQuorum, AsyncClientCallback<RiakResponse> callback);
+	Promise<RiakResponse> fetch(String bucket, String key, int readQuorum) throws IOException;
 
 	/**
 	 * Store the given {@link IRiakObject} in Riak at the location
@@ -69,9 +66,7 @@ public interface RawAsyncClient {
 	 *         true, or null
 	 * @throws IOException
 	 */
-	Future<RiakResponse> store(IRiakObject object, StoreMeta storeMeta) throws IOException;
-
-	void store(IRiakObject object, StoreMeta storeMeta, AsyncClientCallback<RiakResponse> callback);
+	Promise<RiakResponse> store(IRiakObject object, StoreMeta storeMeta) throws IOException;
 
 	/**
 	 * Store the given {@link IRiakObject} in Riak using the bucket default w/dw
@@ -80,9 +75,7 @@ public interface RawAsyncClient {
 	 * @param object the data to store as an {@link IRiakObject}
 	 * @throws IOException
 	 */
-	void store(IRiakObject object) throws IOException;
-
-	void store(IRiakObject object, AsyncClientCallback<Void> callback);
+	Promise<RiakResponse> store(IRiakObject object) throws IOException;
 
 	/**
 	 * Delete the data at <code>bucket/key</code>
@@ -91,9 +84,7 @@ public interface RawAsyncClient {
 	 * @param key
 	 * @throws IOException
 	 */
-	Future<Void> delete(String bucket, String key) throws IOException;
-
-	void delete(String bucket, String key, AsyncClientCallback<Void> callback);
+	Promise<Void> delete(String bucket, String key) throws IOException;
 
 	/**
 	 * Delete the data at <code>bucket/key</code> using
@@ -104,18 +95,14 @@ public interface RawAsyncClient {
 	 * @param deleteQuorum an int that is less than or equal to the bucket's n_val
 	 * @throws IOException
 	 */
-	Future<Void> delete(String bucket, String key, int deleteQuorum) throws IOException;
-
-	void delete(String bucket, String key, int deleteQuorum, AsyncClientCallback<Void> callback);
+	Promise<Void> delete(String bucket, String key, int deleteQuorum) throws IOException;
 
 	// Bucket
 
 	/**
 	 * An Unmodifiable {@link java.util.Iterator} view of the all the Buckets in Riak
 	 */
-	Future<Set<String>> listBuckets() throws IOException;
-
-	void listBuckets(AsyncClientCallback<Set<String>> callback);
+	Promise<Set<String>> listBuckets() throws IOException;
 
 	/**
 	 * The set of properties for the given bucket
@@ -125,9 +112,7 @@ public interface RawAsyncClient {
 	 *         as the underlying API allows)
 	 * @throws IOException
 	 */
-	Future<BucketProperties> fetchBucket(String bucketName) throws IOException;
-
-	void fetchBucket(String bucketName, AsyncClientCallback<BucketProperties> callback);
+	Promise<BucketProperties> fetchBucket(String bucketName) throws IOException;
 
 	/**
 	 * Update a buckets properties from the {@link BucketProperties} provided.
@@ -138,7 +123,7 @@ public interface RawAsyncClient {
 	 * @param bucketProperties the set of properties to be writen
 	 * @throws IOException
 	 */
-	void updateBucket(String name, BucketProperties bucketProperties) throws IOException;
+	Promise<Void> updateBucket(String name, BucketProperties bucketProperties) throws IOException;
 
 	/**
 	 * An unmodifiable {@link java.util.Iterator} view of the keys for the bucket named
@@ -150,9 +135,7 @@ public interface RawAsyncClient {
 	 * @return an unmodifiable, iterable view of the keys for tha bucket
 	 * @throws IOException
 	 */
-	Future<Iterable<String>> listKeys(String bucketName) throws IOException;
-
-	void listKeys(String bucketName, AsyncClientCallback<Iterable<String>> callback);
+	Promise<Iterable<String>> listKeys(String bucketName) throws IOException;
 
 	// Query
 
@@ -167,9 +150,7 @@ public interface RawAsyncClient {
 	 * @return a {@link WalkResult}
 	 * @throws IOException
 	 */
-	Future<WalkResult> linkWalk(final LinkWalkSpec linkWalkSpec) throws IOException;
-
-	void linkWalk(final LinkWalkSpec linkWalkSpec, AsyncClientCallback<WalkResult> callback);
+	Promise<WalkResult> linkWalk(final LinkWalkSpec linkWalkSpec) throws IOException;
 
 	/**
 	 * Perform a map/reduce query defined by {@link MapReduceSpec}
@@ -179,9 +160,7 @@ public interface RawAsyncClient {
 	 * @throws IOException
 	 * @throws MapReduceTimeoutException
 	 */
-	Future<MapReduceResult> mapReduce(final MapReduceSpec spec) throws IOException, MapReduceTimeoutException;
-
-	void mapReduce(final MapReduceSpec spec, AsyncClientCallback<MapReduceResult> callback);
+	Promise<MapReduceResult> mapReduce(final MapReduceSpec spec) throws IOException, MapReduceTimeoutException;
 
 	/**
 	 * If you don't set a client id explicitly at least call this to set one. It
@@ -190,9 +169,7 @@ public interface RawAsyncClient {
 	 *
 	 * @return the generated clientId for the client
 	 */
-	Future<byte[]> generateAndSetClientId() throws IOException;
-
-	void generateAndSetClientId(AsyncClientCallback<byte[]> callback);
+	Promise<byte[]> generateAndSetClientId() throws IOException;
 
 	/**
 	 * Set a client id, currently must be a 4 bytes exactly
@@ -208,12 +185,8 @@ public interface RawAsyncClient {
 	 * @return whatever 4 bytes Riak uses to identify this client
 	 * @throws IOException
 	 */
-	Future<byte[]> getClientId() throws IOException;
+	Promise<byte[]> getClientId() throws IOException;
 
-	void getClientId(AsyncClientCallback<byte[]> callback);
-
-	Future<ServerInfo> getServerInfo() throws IOException;
-
-	void getServerInfo(AsyncClientCallback<ServerInfo> callback);
+	Promise<ServerInfo> getServerInfo() throws IOException;
 
 }

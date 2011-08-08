@@ -2,7 +2,6 @@ package com.jbrisbin.riak.async
 
 import com.basho.riak.client.raw.RiakResponse
 import com.basho.riak.client.raw.StoreMeta
-import com.jbrisbin.riak.async.raw.AsyncClientCallback
 import com.jbrisbin.riak.pbc.RiakObject
 import groovy.json.JsonBuilder
 import java.util.concurrent.CountDownLatch
@@ -114,34 +113,19 @@ class RiakAsyncClientSpec extends Specification {
 		def max = 1000
 		def range = 1..max
 		long start = System.currentTimeMillis()
+		def f
 
 		when:
-		def f
-		CountDownLatch latch = new CountDownLatch(max * 2)
-		AsyncClientCallback callback = new AsyncClientCallback() {
-			@Override void cancelled() {
-
-			}
-
-			@Override void failed(Throwable t) {
-				t.printStackTrace()
-				latch.countDown()
-			}
-
-			@Override void completed(Object result) {
-				latch.countDown()
-			}
-		}
 		range.each {
 			i ->
 			def robj = new RiakObject("store.throughput", "key$i", "text/plain", "content for test entry $i")
-			client.store(robj, new StoreMeta(null, null, false), callback)
+			f = client.store(robj, new StoreMeta(null, null, false))
 		}
 		range.each {
 			i ->
-			client.delete("store.throughput", "key$i", callback)
+			f = client.delete("store.throughput", "key$i")
 		}
-		latch.await(15, TimeUnit.SECONDS)
+		f.get()
 
 		long elapsed = System.currentTimeMillis() - start
 		long throughput = (max * 2) / (elapsed / 1000)
