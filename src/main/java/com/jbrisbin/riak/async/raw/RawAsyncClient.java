@@ -24,7 +24,6 @@ import com.basho.riak.client.query.WalkResult;
 import com.basho.riak.client.raw.RiakResponse;
 import com.basho.riak.client.raw.StoreMeta;
 import com.basho.riak.client.raw.query.LinkWalkSpec;
-import com.basho.riak.client.raw.query.MapReduceSpec;
 import com.basho.riak.client.raw.query.MapReduceTimeoutException;
 import com.jbrisbin.riak.async.Promise;
 import com.jbrisbin.riak.async.Void;
@@ -150,17 +149,17 @@ public interface RawAsyncClient {
 	 * @return a {@link WalkResult}
 	 * @throws IOException
 	 */
-	Promise<WalkResult> linkWalk(final LinkWalkSpec linkWalkSpec) throws IOException;
+	Promise<WalkResult> linkWalk(LinkWalkSpec linkWalkSpec) throws IOException;
 
 	/**
-	 * Perform a map/reduce query defined by {@link MapReduceSpec}
+	 * Perform a map/reduce query defined by this JSON string.
 	 *
-	 * @param spec the m/r job specification
+	 * @param json the m/r job specification
 	 * @return A {@link MapReduceResult}
 	 * @throws IOException
 	 * @throws MapReduceTimeoutException
 	 */
-	Promise<MapReduceResult> mapReduce(final MapReduceSpec spec) throws IOException, MapReduceTimeoutException;
+	Promise<MapReduceResult> mapReduce(String json) throws IOException, MapReduceTimeoutException;
 
 	/**
 	 * If you don't set a client id explicitly at least call this to set one. It

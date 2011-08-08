@@ -53,6 +53,7 @@ import com.jbrisbin.riak.pbc.RiakObject;
 import com.jbrisbin.riak.pbc.RpbFilter;
 import com.jbrisbin.riak.pbc.RpbMessage;
 import org.apache.commons.codec.binary.Base64;
+import org.codehaus.jackson.map.ObjectMapper;
 import org.glassfish.grizzly.Connection;
 import org.glassfish.grizzly.EmptyCompletionHandler;
 import org.glassfish.grizzly.filterchain.BaseFilter;
@@ -89,6 +90,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 	private int maxConnectionRetries = 5;
 	private AtomicInteger retries = new AtomicInteger(0);
 	private LinkedBlockingQueue<RpbRequest> pendingRequests = new LinkedBlockingQueue<RpbRequest>();
+	private ObjectMapper mapper = new ObjectMapper();
 
 	public RiakAsyncClient() {
 		start();
@@ -365,9 +367,19 @@ public class RiakAsyncClient implements RawAsyncClient {
 		throw new UnsupportedOperationException("Link walking not yet supported");
 	}
 
+	@SuppressWarnings({"unchecked"})
 	@Override
-	public Promise<MapReduceResult> mapReduce(MapReduceSpec spec) throws IOException, MapReduceTimeoutException {
-		throw new UnsupportedOperationException("Map/Reduce not yet supported");
+	public Promise<MapReduceResult> mapReduce(String json) throws IOException, MapReduceTimeoutException {
+		RPB.RpbMapRedReq.Builder b = RPB.RpbMapRedReq.newBuilder()
+																								 .setContentType(ByteString.copyFromUtf8("application/json"))
+																								 .setRequest(ByteString.copyFromUtf8(json));
+		Promise<MapReduceResult> promise = new Promise<MapReduceResult>();
+		try {
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_MapRedReq, b.build()), promise));
+		} catch (Exception e) {
+			errorHandler.handleError(e);
+		}
+		return promise;
 	}
 
 	@SuppressWarnings({"unchecked"})
@@ -457,11 +469,9 @@ public class RiakAsyncClient implements RawAsyncClient {
 				case MSG_ErrorResp:
 					RPB.RpbErrorResp errorResp = (RPB.RpbErrorResp) msg.getMessage();
 					pending.getPromise().setFailure(new RiakException(errorResp.getErrmsg().toStringUtf8()));
-					response = new RiakException(errorResp.getErrmsg().toStringUtf8());
 					break;
 				case MSG_DelResp:
-					response = null;
-					pending.getPromise().setResult(Void.INSTANCE);
+					response = Void.INSTANCE;
 					break;
 				case MSG_GetBucketResp:
 					RPB.RpbGetBucketResp bucketResp = (RPB.RpbGetBucketResp) msg.getMessage();
@@ -517,6 +527,13 @@ public class RiakAsyncClient implements RawAsyncClient {
 					response = keys;
 					break;
 				case MSG_MapRedResp:
+					RPB.RpbMapRedResp mapRedResp = (RPB.RpbMapRedResp) msg.getMessage();
+					if (log.isDebugEnabled())
+						log.debug(String.format("MapRed response: %s", mapRedResp));
+					String json = mapRedResp.getResponse().toStringUtf8();
+					RiakAsyncMapReduceResult mapRedResult = new RiakAsyncMapReduceResult();
+					mapRedResult.setResultRaw(json);
+					response = mapRedResult;
 					break;
 				case MSG_PingResp:
 					break;

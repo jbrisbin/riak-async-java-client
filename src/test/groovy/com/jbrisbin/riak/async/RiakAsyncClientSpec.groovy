@@ -4,8 +4,8 @@ import com.basho.riak.client.raw.RiakResponse
 import com.basho.riak.client.raw.StoreMeta
 import com.jbrisbin.riak.pbc.RiakObject
 import groovy.json.JsonBuilder
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import org.codehaus.jackson.map.ObjectMapper
 import spock.lang.Specification
 
 /**
@@ -13,8 +13,10 @@ import spock.lang.Specification
  */
 class RiakAsyncClientSpec extends Specification {
 
+	def INT = 1
 	def TIMEOUT = 5
 	RiakAsyncClient client
+	ObjectMapper mapper = new ObjectMapper()
 
 	def setup() {
 		client = new RiakAsyncClient()
@@ -35,13 +37,14 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
+		r.serverVersion ==~ "0.14.(.+)"
 
 	}
 
 	def "Test storing object"() {
 
 		given:
-		def json = new JsonBuilder(["count": 1, "data": ["column": "one"]]).toPrettyString()
+		def json = new JsonBuilder(["test": INT, "data": ["column": "one"]]).toPrettyString()
 		def robj = new RiakObject("bucket", "key", "application/json", json.bytes)
 
 		when:
@@ -60,7 +63,7 @@ class RiakAsyncClientSpec extends Specification {
 		then:
 		null != r
 		r.riakObjects.length > 0
-		null != r.riakObjects[0].valueAsString
+		mapper.readValue(r.riakObjects[0].valueAsString, Map.class).test == INT
 
 	}
 
@@ -71,6 +74,7 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
+		r.nVal > 0
 
 	}
 
@@ -82,6 +86,7 @@ class RiakAsyncClientSpec extends Specification {
 		then:
 		null != r
 		r.size() > 0
+		r.remove("bucket")
 
 	}
 
@@ -92,6 +97,33 @@ class RiakAsyncClientSpec extends Specification {
 
 		then:
 		null != r
+		r.size() > 0
+		r.remove("key")
+
+	}
+
+	def "Test map/reduce"() {
+
+		given:
+		def mapRedReq = [
+				"inputs": "bucket",
+				"query": [
+						[
+								"map": [
+										"language": "javascript",
+										"name": "Riak.mapValuesJson"
+								]
+						]
+				]
+		]
+
+		when:
+		def r = resolve client.mapReduce(mapper.writeValueAsString(mapRedReq))
+
+		then:
+		null != r
+		r.result.size() > 0
+		r.result[0].test == INT
 
 	}
 
@@ -116,13 +148,12 @@ class RiakAsyncClientSpec extends Specification {
 		def f
 
 		when:
-		range.each {
-			i ->
+		range.each { i ->
 			def robj = new RiakObject("store.throughput", "key$i", "text/plain", "content for test entry $i")
 			f = client.store(robj, new StoreMeta(null, null, false))
 		}
-		range.each {
-			i ->
+		f.get()
+		range.each { i ->
 			f = client.delete("store.throughput", "key$i")
 		}
 		f.get()
