@@ -176,7 +176,7 @@ public interface RawAsyncClient {
 	 * @param clientId any 4 bytes
 	 * @throws IOException
 	 */
-	void setClientId(byte[] clientId) throws IOException;
+	Promise<Void> setClientId(byte[] clientId) throws IOException;
 
 	/**
 	 * Ask Riak for the client id for the current connection.

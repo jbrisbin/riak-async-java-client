@@ -41,7 +41,6 @@ import com.basho.riak.client.query.WalkResult;
 import com.basho.riak.client.raw.RiakResponse;
 import com.basho.riak.client.raw.StoreMeta;
 import com.basho.riak.client.raw.query.LinkWalkSpec;
-import com.basho.riak.client.raw.query.MapReduceSpec;
 import com.basho.riak.client.raw.query.MapReduceTimeoutException;
 import com.basho.riak.client.util.CharsetUtils;
 import com.basho.riak.pbc.RPB;
@@ -82,7 +81,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 	private Integer port = 8087;
 	private Long timeout = 30L;
 	private DelegatingErrorHandler errorHandler = new DelegatingErrorHandler();
-	private ExecutorService workerPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 2);
+	private ExecutorService workerPool = Executors.newFixedThreadPool(PROCESSORS);
 	private HeapMemoryManager heap = new HeapMemoryManager();
 	private TCPNIOTransport transport = TCPNIOTransportBuilder.newInstance().build();
 	private FilterChain filterChain;
@@ -326,7 +325,7 @@ public class RiakAsyncClient implements RawAsyncClient {
 	@Override public Promise<Set<String>> listBuckets() {
 		Promise<Set<String>> promise = new Promise<Set<String>>();
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_ListBucketsReq, null), promise));
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_ListBucketsReq, null), promise));
 		} catch (Exception e) {
 			errorHandler.handleError(e);
 		}
@@ -339,15 +338,33 @@ public class RiakAsyncClient implements RawAsyncClient {
 																											 .setBucket(copyFromUtf8(bucketName));
 		Promise<BucketProperties> promise = new Promise<BucketProperties>();
 		try {
-			connection.write(new RpbRequest(new RpbMessage(MSG_GetBucketReq, b.build()), promise));
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_GetBucketReq, b.build()), promise));
 		} catch (Exception e) {
 			errorHandler.handleError(e);
 		}
 		return promise;
 	}
 
+	@SuppressWarnings({"unchecked"})
 	@Override public Promise<Void> updateBucket(String name, BucketProperties bucketProperties) throws IOException {
-		throw new UnsupportedOperationException("Updating bucket properties not yet supported");
+		RPB.RpbBucketProps.Builder pb = RPB.RpbBucketProps.newBuilder();
+		if (null != bucketProperties.getAllowSiblings()) {
+			pb.setAllowMult(bucketProperties.getAllowSiblings());
+		}
+		if (null != bucketProperties.getNVal()) {
+			pb.setNVal(bucketProperties.getNVal());
+		}
+
+		RPB.RpbSetBucketReq.Builder b = RPB.RpbSetBucketReq.newBuilder()
+																											 .setBucket(copyFromUtf8(name))
+																											 .setProps(pb);
+		Promise<Void> promise = new Promise<Void>();
+		try {
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_SetBucketReq, b.build()), promise));
+		} catch (Exception e) {
+			errorHandler.handleError(e);
+		}
+		return promise;
 	}
 
 	@SuppressWarnings({"unchecked"})
@@ -371,8 +388,8 @@ public class RiakAsyncClient implements RawAsyncClient {
 	@Override
 	public Promise<MapReduceResult> mapReduce(String json) throws IOException, MapReduceTimeoutException {
 		RPB.RpbMapRedReq.Builder b = RPB.RpbMapRedReq.newBuilder()
-																								 .setContentType(ByteString.copyFromUtf8("application/json"))
-																								 .setRequest(ByteString.copyFromUtf8(json));
+																								 .setContentType(copyFromUtf8("application/json"))
+																								 .setRequest(copyFromUtf8(json));
 		Promise<MapReduceResult> promise = new Promise<MapReduceResult>();
 		try {
 			getConnection().write(new RpbRequest(new RpbMessage(MSG_MapRedReq, b.build()), promise));
@@ -404,8 +421,17 @@ public class RiakAsyncClient implements RawAsyncClient {
 		return promise;
 	}
 
-	@Override public void setClientId(byte[] clientId) throws IOException {
-		throw new UnsupportedOperationException("Setting custom client IDs not yet supported");
+	@SuppressWarnings({"unchecked"})
+	@Override public Promise<Void> setClientId(byte[] clientId) throws IOException {
+		RPB.RpbSetClientIdReq.Builder b = RPB.RpbSetClientIdReq.newBuilder()
+																													 .setClientId(copyFrom(clientId));
+		Promise<Void> promise = new Promise<Void>();
+		try {
+			getConnection().write(new RpbRequest(new RpbMessage(MSG_SetClientIdReq, b.build()), promise));
+		} catch (Exception e) {
+			errorHandler.handleError(e);
+		}
+		return promise;
 	}
 
 	@SuppressWarnings({"unchecked"})
@@ -545,13 +571,13 @@ public class RiakAsyncClient implements RawAsyncClient {
 					response = new RiakResponse(putResp.getVclock().toByteArray(), robjs.toArray(new RiakObject[robjs.size()]));
 					break;
 				case MSG_SetBucketResp:
+					response = Void.INSTANCE;
 					break;
 				case MSG_SetClientIdResp:
 					RPB.RpbSetClientIdReq clientIdReq = (RPB.RpbSetClientIdReq) pending.getMessage().getMessage();
 					response = clientIdReq.getClientId().toByteArray();
 					break;
 			}
-			// Maybe call callback
 			if (null != response)
 				pending.getPromise().setResult(response);
 
